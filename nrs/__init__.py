@@ -1,0 +1,1 @@
+import nrs.class_handlers # Required to load the init

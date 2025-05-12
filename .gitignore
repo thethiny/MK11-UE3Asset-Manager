@@ -1,0 +1,10 @@
+Databases
+extracted
+__pycache__
+*.pyc
+*.dll
+
+# Temporary Scripts
+out.py
+get_enums.py
+make_enums.py
