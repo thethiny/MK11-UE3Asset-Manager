@@ -1,7 +1,7 @@
 import logging
 
-from nrs.games.mk11.class_handlers.database import DatabaseHandler # Required to be in locals()
-from nrs.ue3_common import ClassHandler
+from mk_utils.nrs.games.mk11.class_handlers.database import DatabaseHandler as MK11DatabaseHandler # Required to be in locals()
+from mk_utils.nrs.ue3_common import ClassHandler
 
 
 logging.getLogger("ClassHandlers").debug(f"Registering handlers")

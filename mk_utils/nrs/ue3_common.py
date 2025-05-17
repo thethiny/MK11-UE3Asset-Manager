@@ -4,8 +4,8 @@ import logging
 from ctypes import c_char, c_int32, c_ubyte, c_uint32, c_uint16, c_uint64
 from typing import Any, Union, Iterable, List, Tuple, Type, TypedDict
 
-from utils.filereader import FileReader
-from utils.structs import Struct, hex_s
+from mk_utils.utils.filereader import FileReader
+from mk_utils.utils.structs import Struct, hex_s
 from requests.utils import CaseInsensitiveDict
 
 

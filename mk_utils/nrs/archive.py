@@ -4,11 +4,11 @@ import logging
 import os
 from typing import Any, Type
 
-from nrs.ue3_common import MK11AssetHeader, MK11Archive
-from nrs.compression.oodle import OodleV5
-from nrs.games.mk11.enums import CompressionType
-from nrs.midway import MidwayAsset
-from utils.structs import T, Struct
+from mk_utils.nrs.ue3_common import MK11AssetHeader, MK11Archive
+from mk_utils.nrs.compression.oodle import OodleV5
+from mk_utils.nrs.games.mk11.enums import CompressionType
+from mk_utils.nrs.midway import MidwayAsset
+from mk_utils.utils.structs import T, Struct
 
 class MK11AssetSubPackage(Struct):
     __slots__ = ()

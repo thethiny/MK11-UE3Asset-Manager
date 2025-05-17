@@ -2,7 +2,7 @@ import ctypes
 from enum import IntEnum
 from typing import Optional
 
-from nrs.compression.base import CompressionBase
+from mk_utils.nrs.compression.base import CompressionBase
 
 class OodleCompressionCodecs(IntEnum):
     MK11 = 7

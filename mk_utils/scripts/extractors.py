@@ -1,8 +1,8 @@
 import logging
 from typing import List
 
-from nrs.archive import MK11UE3Asset
-from nrs.ue3_common import get_handlers
+from mk_utils.nrs.archive import MK11UE3Asset
+from mk_utils.nrs.ue3_common import get_handlers
 
 ClassHandlers = get_handlers()
 

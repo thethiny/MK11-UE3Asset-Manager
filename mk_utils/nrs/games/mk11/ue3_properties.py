@@ -1,13 +1,10 @@
 import logging
 from ctypes import c_char, c_float, c_ubyte, c_uint32, c_uint64
-import os
-from typing import Any, Dict, Iterable, List, Tuple, Type, TypedDict
-from requests.utils import CaseInsensitiveDict
+from typing import Dict, Tuple, Type
 
-from nrs.ue3_common import GUID, MK11ExportTableEntry, UETableEntryBase
-from nrs.games.mk11.enums import enumMaps
-from utils.filereader import FileReader
-from utils.structs import Struct
+from mk_utils.nrs.ue3_common import GUID
+from mk_utils.nrs.games.mk11.enums import enumMaps
+from mk_utils.utils.structs import Struct
 
 warned_classes = set()
 
