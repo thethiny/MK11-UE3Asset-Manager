@@ -4,8 +4,8 @@ import os
 from typing import Any, Dict, Iterable, List, Tuple, Type, TypedDict
 from requests.utils import CaseInsensitiveDict
 
-from nrs.ue3_common import GUID, MK11ExportTableEntry
-from nrs.game.enums import enumMaps
+from nrs.ue3_common import GUID, MK11ExportTableEntry, UETableEntryBase
+from nrs.games.mk11.enums import enumMaps
 from utils.filereader import FileReader
 from utils.structs import Struct
 
@@ -322,47 +322,3 @@ PropertyMap: Dict[str, Type[UProperty]] = {
 }
 
 StructPropertyMap: Dict[str, Type[StructProperty]] = {"FGuid": FGuid}
-
-class ClassHandler(FileReader):
-    HANDLED_TYPES: Iterable = {}
-
-    def __init__(self, file_path, name_table: List[str]) -> None:
-        super().__init__(file_path)
-
-        self.name_table = name_table
-
-    def parse(self):
-        raise NotImplementedError(f"Implement me")
-
-    def save(self, data: Any, export: MK11ExportTableEntry, asset_name: str, save_path: str):
-        if not save_path:
-            raise ValueError(f"Missing save_path!")
-
-        save_path = os.path.join(save_path, asset_name, "parsed_exports", export.path.lstrip("/"))
-        os.makedirs(save_path, exist_ok=True)
-        return os.path.join(save_path, export.file_name)
-
-    @classmethod
-    def register_handlers(cls):
-        for type_ in cls.HANDLED_TYPES:
-            logging.getLogger("ClassHandler").debug(f"Type {type_} handled by {cls}.")
-            assign_handlers(cls, type_)
-
-
-class ClassHandlerType(TypedDict):
-    handler_class: Type[ClassHandler]
-    args: Tuple[Any, ...]
-
-class_handlers: CaseInsensitiveDict[ClassHandlerType] = CaseInsensitiveDict()
-
-def assign_handlers(handler: Type[ClassHandler], handler_class: str, *handler_args: Any):
-    if handler_class in class_handlers:
-        raise ValueError(f"Clashing with handler {handler_class}")
-
-    class_handlers[handler_class] = {
-        "handler_class": handler,
-        "args": handler_args,
-    }
-
-def get_handlers():
-    return class_handlers

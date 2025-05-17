@@ -1,1 +1,1 @@
-import nrs.class_handlers # Required to load the init
+import nrs.games.mk11.class_handlers # Required to load the init

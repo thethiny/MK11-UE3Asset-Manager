@@ -1,9 +1,12 @@
+import os
+import logging
+
 from ctypes import c_char, c_int32, c_ubyte, c_uint32, c_uint16, c_uint64
-from logging import getLogger
-from typing import Any, Union
+from typing import Any, Union, Iterable, List, Tuple, Type, TypedDict
 
 from utils.filereader import FileReader
 from utils.structs import Struct, hex_s
+from requests.utils import CaseInsensitiveDict
 
 
 class GUID(Struct):
@@ -136,6 +139,22 @@ class MK11Archive(FileReader):
     def parse_filetable_table_entries(self, count):
         yield from (MK11ExternalTableEntry.read(self.mm) for _ in range(count))    
 
+class UETableEntryBase: # TODO: To be moved to UE_Common
+    @property
+    def file_name(self):
+        raise NotImplementedError(f"Abstract Class Method not implemented!")
+
+    @property
+    def file_dir(self):
+        raise NotImplementedError(f"Abstract Class Method not implemented!")
+
+    @property
+    def full_name(self): 
+        raise NotImplementedError(f"Abstract Class Method not implemented!")
+
+    @property
+    def path(self): 
+        raise NotImplementedError(f"Abstract Class Method not implemented!")
 
 class MK11TableEntry(Struct):
     @classmethod
@@ -168,7 +187,8 @@ class MK11NoneTableEntry(MK11TableEntry):
     def __bool__(self):
         return False
 
-class MK11ExportTableEntry(MK11TableEntry):
+
+class MK11ExportTableEntry(MK11TableEntry, UETableEntryBase):
     _fields_ = [
         ("object_class", c_int32), # 0 = None, > 0 = exports[i-1], < 0 = imports[abs(i)-1]
         ("object_outer_class", c_int32), # 0 = None, > 0 = exports[i-1], < 0 = imports[abs(i)-1]
@@ -253,11 +273,12 @@ class MK11ExportTableEntry(MK11TableEntry):
         self.class_super = object_super # Unknown
         self.package = package # MK11 Metadata
 
-        getLogger("Common").debug(f"Resolved Export: {self.full_name}")
+        logging.getLogger("Common").debug(f"Resolved Export: {self.full_name}")
 
         # self.file = "" # Either Bulk, UPK, PSF... etc # I think this is in another function
 
-class MK11ImportTableEntry(MK11TableEntry):
+
+class MK11ImportTableEntry(MK11TableEntry, UETableEntryBase):
     _fields_ = [
         ("import_class_package", c_int32), # Package/Other/HeaderData
         ("import_name", c_int32),
@@ -314,4 +335,57 @@ class MK11ImportTableEntry(MK11TableEntry):
         self.outer_class = self.resolve_object(self.import_outer_class, import_table, export_table) # Uknown
         self.unknown = self.resolve_object(self.object_name, import_table, export_table) # Unknown
 
-        getLogger("Common").debug(f"Resolved Import: {self.full_name}")
+        logging.getLogger("Common").debug(f"Resolved Import: {self.full_name}")
+
+
+class ClassHandler(FileReader): # TODO: To be moved later to UE_Common or UE_Utils
+    HANDLED_TYPES: Iterable = {}
+
+    def __init__(self, file_path, name_table: List[str]) -> None:
+        super().__init__(file_path)
+
+        self.name_table = name_table
+
+    def parse(self):
+        raise NotImplementedError(f"Implement me")
+
+    @classmethod
+    def make_save_path(cls, export: UETableEntryBase, asset_name: str, save_path: str):
+        if not save_path:
+            raise ValueError(f"Missing save_path!")
+
+        save_path = os.path.join(save_path, asset_name, "parsed_exports", export.path.lstrip("/"))
+        os.makedirs(save_path, exist_ok=True)
+        return os.path.join(save_path, export.file_name)
+
+    def save(self, data: Any, export: UETableEntryBase, asset_name: str, save_path: str) -> str:
+        raise NotImplementedError(f"Implement me")
+
+    @classmethod
+    def register_handlers(cls):
+        for type_ in cls.HANDLED_TYPES:
+            logging.getLogger("ClassHandler").debug(f"Type {type_} handled by {cls}.")
+            assign_handlers(cls, type_)
+
+
+class ClassHandlerItemType(TypedDict):
+    handler_class: Type[ClassHandler]
+    args: Tuple[Any, ...]
+
+
+ClassHandlerType = CaseInsensitiveDict[ClassHandlerItemType]
+class_handlers: ClassHandlerType = CaseInsensitiveDict()
+
+
+def assign_handlers(handler: Type[ClassHandler], handler_class: str, *handler_args: Any):
+    if handler_class in class_handlers:
+        raise ValueError(f"Clashing with handler {handler_class}")
+
+    class_handlers[handler_class] = {
+        "handler_class": handler,
+        "args": handler_args,
+    }
+
+
+def get_handlers(): # TODO: This should accept a GAME and handle the registration and class_handlers should be per game
+    return class_handlers

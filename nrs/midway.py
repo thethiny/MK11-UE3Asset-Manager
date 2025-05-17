@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 from typing import Literal, Sequence, Type, Union
 
-from nrs.ue3_common import MK11Archive, MK11ExportTableEntry, MK11ImportTableEntry, MK11TableEntry, MK11TableMeta
-from nrs.game.enums import CompressionType
+from nrs.ue3_common import ClassHandler, MK11Archive, MK11ExportTableEntry, MK11ImportTableEntry, MK11TableEntry, MK11TableMeta
+from nrs.games.mk11.enums import CompressionType
 from utils.structs import T, Struct
 
 
@@ -257,9 +257,18 @@ class MidwayAsset(MK11Archive):
             for i, entry in enumerate(table):
                 f.write(f"{hex(i)[2:].upper()}:\t{func(entry)}\n")
 
-    def parse_and_save_export(self, export: MK11ExportTableEntry, handler, save_dir: str):
+    def parse_and_save_export(self, export: MK11ExportTableEntry, handler: Type[ClassHandler], save_dir: str, overwrite: bool = False):
+        if overwrite == False:
+            out_file = handler.make_save_path(export, self.file_name, save_dir)
+            if os.path.isfile(out_file):
+                logging.getLogger("Midway").debug(f"File {out_file} already exists and overwrite is False...")
+                logging.getLogger("Midway").info(f"Skipping {export.file_name}...")
+                return out_file
+
         export_data = self.read_export(export)
         handler_obj = handler(export_data, self.name_table)
+
         parsed = handler_obj.parse()
 
-        handler_obj.save(parsed, export, self.file_name, save_dir)
+        saved_file = handler_obj.save(parsed, export, self.file_name, save_dir)
+        return saved_file

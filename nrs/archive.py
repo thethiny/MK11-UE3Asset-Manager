@@ -6,7 +6,7 @@ from typing import Any, Type
 
 from nrs.ue3_common import MK11AssetHeader, MK11Archive
 from nrs.compression.oodle import OodleV5
-from nrs.game.enums import CompressionType
+from nrs.games.mk11.enums import CompressionType
 from nrs.midway import MidwayAsset
 from utils.structs import T, Struct
 
@@ -90,7 +90,7 @@ class MK11BlockChunkHeader(Struct):
         ("decompressed_size", c_uint64),
     ]
 
-class MK11UE3Asset(MK11Archive):
+class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game version and call the appropriate archiver
     def __init__(self, path: str):
         super().__init__(path)
 

@@ -1,5 +1,6 @@
 import json
-from nrs.game.PropertyTypes import ClassHandler, UProperty
+from nrs.games.mk11.ue3_properties import UProperty
+from nrs.ue3_common import ClassHandler, MK11ExportTableEntry
 
 
 class DatabaseHandler(ClassHandler):
@@ -18,10 +19,16 @@ class DatabaseHandler(ClassHandler):
             data.update(value)
 
         return data
+    
+    @classmethod
+    def make_save_path(cls, export: MK11ExportTableEntry, asset_name: str, save_path: str):
+        save_path = super().make_save_path(export, asset_name, save_path)
+        return save_path + ".json"
 
     def save(self, data, export, asset_name, save_dir):
-        save_path = super().save(data, export, asset_name, save_dir)
-        save_file = save_path + ".json"
+        save_file = self.make_save_path(export, asset_name, save_dir)
         
         with open(save_file, "w+") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
+            
+        return save_file
