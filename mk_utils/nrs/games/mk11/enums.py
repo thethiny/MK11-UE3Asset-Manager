@@ -112,6 +112,40 @@ class EKollectionCategoryType(IntEnum):
     Recipes      = 0x07
     Max          = 0x08
 
+class EInventoryHideGroupType(IntEnum):
+    NONE            = 0x00
+    Hidden          = 0x01
+    HiddenGroup1    = 0x02
+    HiddenGroup2    = 0x03
+    HiddenGroup3    = 0x04
+    HiddenGroup4    = 0x05
+    HiddenGroup5    = 0x06
+    HiddenGroup6    = 0x07
+    HiddenGroup7    = 0x08
+    HiddenGroup8    = 0x09
+    HiddenGroup9    = 0x0A
+    HiddenGroup10   = 0x0B
+    HiddenGroup11   = 0x0C
+    HiddenGroup12   = 0x0D
+    HiddenGroup13   = 0x0E
+    HiddenGroup14   = 0x0F
+    HiddenGroup15   = 0x10
+    HiddenGroup16   = 0x11
+
+class EItemMoveInfoBlockType(IntEnum):
+    NONE            = 0x00
+    Low             = 0x01
+    Med             = 0x02
+    High            = 0x03
+    Overhead        = 0x04
+
+class EInventoryGenerationType(IntEnum):
+    Release         = 0x00
+    Full            = 0x01
+    Generated       = 0x02
+    Linked          = 0x03
+    QA_Linked       = 0x04
+    QA_Attributes   = 0x05
 
 enumMaps: Dict[str, Type[Enum]] = {
     "mUnlockType": MK11UnlockableType,
@@ -123,4 +157,6 @@ enumMaps: Dict[str, Type[Enum]] = {
     "UnlockableType": EItemUnlockableType,
     "Mode": EAttributeModeRestrictionType,  # Can be multiple, depends on file type and such
     "Type": EAttributeParameterType,  # Can be multiple, depends on file type and such
+    "MoveInfoBlockType": EItemMoveInfoBlockType,
+    "HideGroup": EInventoryHideGroupType,
 }
