@@ -31,11 +31,12 @@ class MK11UnlockableType(IntEnum):
     kUnlockAnnouncer         = 0xF
 
 class EItemRarityType(IntEnum):
-    NONE    = 0x00
+    # NONE    = 0x00
+    Rarity0 = 0x00 # Either this is Rarity0, or the Localization files subtracts 1 from them
     Rarity1 = 0x01
     Rarity2 = 0x02
     Rarity3 = 0x03
-    Rarity4 = 0x04
+    Rarity4 = 0x04 # I think 4 does not exist
     Max     = 0x05
     Normal  = 0x06
     Mortal  = 0x07
