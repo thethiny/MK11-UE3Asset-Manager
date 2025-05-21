@@ -1,4 +1,4 @@
-from ctypes import c_int32, c_int64, c_uint32, c_wchar
+from ctypes import c_char, c_int32, c_int64, c_uint32, c_wchar
 from genericpath import isfile
 import logging
 import os
@@ -17,6 +17,7 @@ class LocalizationParser(FileReader):
         super().__init__(localization_file)
 
         self.locale = os.path.splitext(localization_file)[1][1:].upper()
+        self.locale_type = "config" if self.locale == "INI" else "localization"
 
         val_1, val_2 = Struct.read_buffer(self.mm, c_int32, signed=True), Struct.read_buffer(self.mm, c_int32, signed=True)
         self.mm.seek(-8, 2)
@@ -30,7 +31,7 @@ class LocalizationParser(FileReader):
             cipher = AES.new(aes_key, AES.MODE_ECB)
         else:
             cipher = self.CIPHER
-        
+
         padded_len = (len(self.mm) + 15) & ~15
         padded_data = self.mm[:].ljust(padded_len, b"\x00")
         decrypted = cipher.decrypt(padded_data)
@@ -46,27 +47,31 @@ class LocalizationParser(FileReader):
         self.close()
         super().__init__(decrypted)
 
+    def _read_content_string(self) -> str:
+        read_length = Struct.read_buffer(self.mm, c_int32, signed=True)
+        if read_length < 0:
+            return Struct.read_buffer(self.mm, c_wchar * abs(read_length))
+        else:
+            return Struct.read_buffer(self.mm, c_char * read_length).decode("utf-8")
+
     def extract_files(self, save_dir: str = "extracted"):#, merge: bool = False): # If merge is true then all files extract into the same fodler
         # On save files should be padded to 0x16 for proper AES
         text_sections_count = Struct.read_buffer(self.mm, c_uint32)
         # file_out_dir = os.path.join(save_dir, "Localization", "merged" if merge else self.locale, "contents")
         file_out_dir = os.path.join(save_dir, "Localization", "contents")
         for i in range(0, text_sections_count, 2):
-            path_length = abs(Struct.read_buffer(self.mm, c_int32, signed=True))
-            file_path: str = Struct.read_buffer(self.mm, c_wchar * path_length)
-            
+            file_path: str = self._read_content_string()
             logging.getLogger("LocalizationParser").debug(f"Extracting file {i:0>2}: {file_path}")
 
-            content_length = abs(Struct.read_buffer(self.mm, c_int32, signed=True))
-            content: str = Struct.read_buffer(self.mm, c_wchar * content_length)
+            content: str = self._read_content_string()
 
             if save_dir:
                 path, name, extension = split_path(file_path)
                 full_out_path = os.path.join(file_out_dir, path)
                 os.makedirs(full_out_path, exist_ok=True)
-                
+
                 file_out = os.path.join(full_out_path, f"{name}{extension}")
                 with open(file_out, "w+", encoding="utf-16-le", newline="") as f:
                     f.write(content) # On save requires null terminator 00 00
-                    
+
             yield file_path, content
