@@ -91,6 +91,7 @@ class MK11AssetExternalTable(Struct):
         data += self._to_little(self.unk_2, 4)
         data += self._to_little(self.name_length, 4)
         data += self.name.encode('ascii') if isinstance(self.name, str) else self.name # type: ignore
+        data += b"\0" # Null Terminator
         data += self._to_little(self.entries_count, 4)
         return data
 
@@ -100,16 +101,15 @@ class MK11ExternalTableEntry(Struct):
     _fields_ = [
         ("decompressed_size", c_uint64),
         ("compressed_size", c_uint64),
-        ("decompressed_offset", c_uint64),
-        ("compressed_offset", c_uint64),
+        ("offset_internal", c_uint64),
+        ("offset_external", c_uint64),
     ]
-
 
 class MK11Archive(FileReader):
     def __init__(self, source):
         super().__init__(source)
         self.parsed = False
-    
+
     def read_buffer(self, size):
         return Struct.read_buffer(self.mm, size)
 
@@ -134,10 +134,27 @@ class MK11Archive(FileReader):
             table = MK11AssetExternalTable.read(self.mm)
             entries = list(self.parse_filetable_table_entries(table.entries_count))
             table.add_member("entries", entries)
+            table.add_member("compression_flag", Struct.read_buffer(self.mm, c_uint32))
+            self.validate_filetable_table_entries(table)
             yield table
 
     def parse_filetable_table_entries(self, count):
         yield from (MK11ExternalTableEntry.read(self.mm) for _ in range(count))    
+
+    @classmethod
+    def validate_filetable_table_entries(cls, table):
+        compression = table.compression_flag
+        for entry in table.entries:
+            if entry.offset_external == -1 & 0xFFFFFFFFFFFFFFFF:
+                if compression != 0:
+                    raise ValueError(f"Unknown Handling when no compression")
+                entry.add_member("location", "upk") # TODO: Change this, I believe it is wrong. -1 means no offset, compress == decompress means same file as table. Example: PSF Table -> PSF. Bulk Table -> UPK.
+            elif entry.offset_external == entry.offset_internal:
+                entry.add_member("location", "psf")
+            else:
+                raise ValueError(
+                    f"Unknown scenario when file in psf but has a location in upk as well!"
+                )
 
 class UETableEntryBase: # TODO: To be moved to UE_Common
     @property
@@ -177,6 +194,7 @@ class MK11TableEntry(Struct):
     def __init__(self, *args: Any, **kw: Any) -> None:
         super().__init__(*args, **kw)
         self.name: str = ""
+        self.resolved = False # I don't think these 2 are ever assigned
 
     def __new__(cls):
         obj = super().__new__(cls)
@@ -186,6 +204,11 @@ class MK11TableEntry(Struct):
 class MK11NoneTableEntry(MK11TableEntry):
     def __bool__(self):
         return False
+    
+    def __init__(self, *args: Any, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.name = "None"
+        self.resolved = True
 
 
 class MK11ExportTableEntry(MK11TableEntry, UETableEntryBase):
@@ -204,7 +227,7 @@ class MK11ExportTableEntry(MK11TableEntry, UETableEntryBase):
         ("unk_2", c_uint64),
         ("unk_3", c_uint32),
     ]
-
+    
     @property
     def file_name(self):
         name = self.name
@@ -233,7 +256,10 @@ class MK11ExportTableEntry(MK11TableEntry, UETableEntryBase):
         super_ = self.class_outer
         while super_:
             path.append(super_.name)
-            super_ = super_.class_outer
+            if isinstance(super_, type(self)):
+                super_ = super_.class_outer
+            else:
+                super_ = super_.package # Import Table uses package. I need to unify them one day.
 
         if not path:
             return ''
@@ -273,7 +299,8 @@ class MK11ExportTableEntry(MK11TableEntry, UETableEntryBase):
         self.class_super = object_super # Unknown
         self.package = package # MK11 Metadata
 
-        logging.getLogger("Common").debug(f"Resolved Export: {self.full_name}")
+        # logging.getLogger("Common").debug(f"Resolved Export: {self.full_name}")
+        self.resolved = True
 
         # self.file = "" # Either Bulk, UPK, PSF... etc # I think this is in another function
 
@@ -303,7 +330,10 @@ class MK11ImportTableEntry(MK11TableEntry, UETableEntryBase):
         super_ = self.package
         while super_:
             path.append(super_.name)
-            super_ = super_.package
+            if isinstance(super_, type(self)):
+                super_ = super_.package 
+            else:
+                super_ = super_.class_outer  # For export it is class_ or class_outer, not sure yet and not package.
 
         if not path:
             return '/'
@@ -335,7 +365,8 @@ class MK11ImportTableEntry(MK11TableEntry, UETableEntryBase):
         self.outer_class = self.resolve_object(self.import_outer_class, import_table, export_table) # Uknown
         self.unknown = self.resolve_object(self.object_name, import_table, export_table) # Unknown
 
-        logging.getLogger("Common").debug(f"Resolved Import: {self.full_name}")
+        # logging.getLogger("Common").debug(f"Resolved Import: {self.full_name}")
+        self.resolved = True
 
 
 class ClassHandler(FileReader): # TODO: To be moved later to UE_Common or UE_Utils

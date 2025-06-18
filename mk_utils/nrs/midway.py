@@ -50,6 +50,8 @@ class MidwayAsset(MK11Archive):
         if resolve:
             self.resolve_table_info(self.import_table)
             self.resolve_table_info(self.export_table)
+            self.print_resolves(self.import_table)
+            self.print_resolves(self.export_table)
 
         errors = self.validate_exports()
         if errors:
@@ -164,6 +166,10 @@ class MidwayAsset(MK11Archive):
     def resolve_table_info(self, table):
         for entry in table:
             entry.resolve(self.name_table, self.import_table, self.export_table)
+
+    def print_resolves(self, table):
+        for entry in table:
+            logging.getLogger("Common").debug(f"Resolved {entry.__class__.__name__}: {entry.full_name}")
 
     def parse_summary(self):
         self.header = self.parse_header()

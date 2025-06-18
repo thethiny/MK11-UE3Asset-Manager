@@ -111,7 +111,7 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
         self.meta_size = self.mm.tell() # Size of all header metas
 
         self.parsed = True
-        
+
     def dump(self, save_path: str):
         save_path = os.path.join(save_path, self.file_name)
         os.makedirs(save_path, exist_ok=True)
@@ -129,9 +129,9 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
             entry_data = self.deserialize_block()
 
             if save_path:
-                save_path = os.path.join(save_path, "packages", package.package_name)
-                os.makedirs(save_path, exist_ok=True)
-                with open(os.path.join(save_path, f"file_{i}.bin"), "wb") as f:
+                export_path = os.path.join(save_path, "packages", package.package_name)
+                os.makedirs(export_path, exist_ok=True)
+                with open(os.path.join(export_path, f"file_{i}.bin"), "wb") as f:
                     f.write(entry_data)
 
             yield entry.decompressed_offset, entry_data
@@ -222,6 +222,7 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
                 out += table.serialize()
                 for entry in table.entries:
                     out += entry.serialize()
+                out += Struct._to_little(table.compression_flag, 4)
             return out
 
         @classmethod
