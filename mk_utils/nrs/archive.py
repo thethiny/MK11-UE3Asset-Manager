@@ -18,6 +18,9 @@ class MK11AssetSubPackage(Struct):
         ("compressed_offset", c_uint64),
         ("compressed_size", c_uint64),
     ]
+    
+    def __len__(self):
+        return self.entries_count
 
 class _MK11AssetPackage(Struct):
     __slots__ = ()
@@ -28,6 +31,10 @@ class _MK11AssetPackage(Struct):
         ("compressed_size", c_uint64),
         ("entries_count", c_uint32),
     ]
+
+    def __len__(self):
+        return self.entries_count
+
 
 class MK11AssetPackage(Struct):
     _fields_ = [
@@ -91,8 +98,8 @@ class MK11BlockChunkHeader(Struct):
     ]
 
 class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game version and call the appropriate archiver
-    def __init__(self, path: str):
-        super().__init__(path)
+    def __init__(self, path: str, extra_path: str = ""):
+        super().__init__(path, extra_path)
 
     def parse(self):
         self.header = self.parse_header()
@@ -103,33 +110,75 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
             raise NotImplementedError(f"Only Oodle Compression is supported")
 
         self.packages = self.parse_packages()
-        self.packages_extra = self.parse_packages()
+        self.packages_extra = self.parse_packages() # Same as psf_table but one is in UE3 Asset one is in Midway Asset
         self.skip(0x18)
-        self.file_name = self.parse_file_meta()
-        self.psf_tables = self.parse_file_table()
-        self.bulk_tables = self.parse_file_table()
+        self.file_name = self.parse_file_name()
+        self.psf_tables = self.parse_file_table("psf") # Total count must match packages_extra and they should belong in there
+        self.bulk_tables = self.parse_file_table("bulk")
         self.meta_size = self.mm.tell() # Size of all header metas
+        
+        self.validate_psf_with_extra()
 
         self.parsed = True
+        
+    def validate_psf_with_extra(self):
+        def entry_pairs(psf_tables):
+            for psf_table in psf_tables:
+                for psf_entry in psf_table.entries:
+                    yield psf_entry
+
+        def pkg_pairs(packages_extra):
+            for pkg_table in packages_extra:
+                for pkg_entry in pkg_table.entries:
+                    yield pkg_entry
+
+        psf_iter = entry_pairs(self.psf_tables)
+        pkg_iter = pkg_pairs(self.packages_extra)
+
+        for idx, (psf_entry, pkg_entry) in enumerate(zip(psf_iter, pkg_iter)):
+            compressed_match = psf_entry.compressed_offset == pkg_entry.compressed_offset
+            if not compressed_match:
+                raise ValueError(f"Index {idx} {psf_entry.compressed_offset == pkg_entry.compressed_offset=}")
+            
+            decompressed_match = psf_entry.decompressed_offset == pkg_entry.decompressed_offset
+            if not decompressed_match:
+                raise ValueError(f"Index {idx} {psf_entry.decompressed_offset == pkg_entry.decompressed_offset=}")
+            
+            
+        try:
+            next(psf_iter)
+            raise ValueError("psf_tables has extra entries not matched in packages_extra")
+        except StopIteration:
+            pass
+
+        try:
+            next(pkg_iter)
+            raise ValueError("packages_extra has extra entries not matched in psf_tables")
+        except StopIteration:
+            pass
+
+
 
     def dump(self, save_path: str):
         save_path = os.path.join(save_path, self.file_name)
         os.makedirs(save_path, exist_ok=True)
-        for _ in self.deserialize_packages(save_path): pass
+        for _ in self.deserialize_packages(False, save_path): pass
 
-    def deserialize_packages(self, save_path: str = ""):
-        for package in self.packages:
-            getLogger("FArchive").debug(f"Deserializing Package {package.package_name}")
-            yield from self.deserialize_package_entries(package, save_path)
+        # for _ in self.deserialize_packages(True, save_path): pass # Disabled to to it using too much space for no reason
 
-    def deserialize_package_entries(self, package: MK11AssetPackage, save_path: str = ""):
+    def deserialize_packages(self, is_extra: bool = False, save_path: str = ""):
+        for package in self.packages_extra if is_extra else self.packages:
+            getLogger("FArchive").debug(f"Deserializing{' Extra ' if is_extra else ' '}Package {package.package_name}")
+            yield from self.deserialize_package_entries(package, is_extra, save_path)
+
+    def deserialize_package_entries(self, package: MK11AssetPackage, is_extra: bool = False, save_path: str = ""):
         for i, entry in enumerate(package.entries):
             entry_offset = entry.compressed_offset
             self.mm.seek(entry_offset)
             entry_data = self.deserialize_block()
 
             if save_path:
-                export_path = os.path.join(save_path, "packages", package.package_name)
+                export_path = os.path.join(save_path, "packages_extra" if is_extra else "packages", package.package_name)
                 os.makedirs(export_path, exist_ok=True)
                 with open(os.path.join(export_path, f"file_{i}.bin"), "wb") as f:
                     f.write(entry_data)
@@ -178,7 +227,7 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
 
     def to_midway(self):
         buffer = self._MidwayBuilder.from_mk11(self)
-        return MidwayAsset(buffer)
+        return MidwayAsset(buffer, self.psf_source)
 
     class _MidwayBuilder:
         @classmethod

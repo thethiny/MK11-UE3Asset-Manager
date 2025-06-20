@@ -4,7 +4,7 @@ from typing import Union
 
 
 class FileReader:
-    def __init__(self, source: Union[bytes, str, Path]):
+    def __init__(self, source: Union[bytes, str, Path, mmap.mmap, "FileReader"]):
         if isinstance(source, (str, Path)):
             self.file = open(source, "rb")
             self.mm = mmap.mmap(self.file.fileno(), 0, access=mmap.ACCESS_READ)
@@ -15,6 +15,14 @@ class FileReader:
             self.mm.write(source)
             self.mm.seek(0)
             self.owns_file = False
+        elif isinstance(source, mmap.mmap):
+            self.file = None
+            self.mm = source
+            self.owns_file = False
+        elif isinstance(source, FileReader):
+            self.file = source.file
+            self.mm = source.mm
+            self.owns_file = source.owns_file
         else:
             raise TypeError("Expected a file path or bytes.")
 

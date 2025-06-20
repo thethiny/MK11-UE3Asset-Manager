@@ -4,6 +4,7 @@ import logging
 from ctypes import c_char, c_int32, c_ubyte, c_uint32, c_uint16, c_uint64
 from typing import Any, Union, Iterable, List, Tuple, Type, TypedDict
 
+from assets.mk_utils.nrs.games.mk11.enums import CompressionType
 from mk_utils.utils.filereader import FileReader
 from mk_utils.utils.structs import Struct, hex_s
 from requests.utils import CaseInsensitiveDict
@@ -69,28 +70,25 @@ class MK11AssetExternalTable(Struct):
     def __init__(self, *args: Any, **kw: Any) -> None:
         super().__init__(*args, **kw)
 
-        self.unk_1 = c_uint32
-        self.unk_2 = c_uint32
-        self.name_length = c_uint32
-        self.name = c_char
+        self.owner_key = c_uint64
+        self.package_name_length = c_uint32
+        self.package_name = c_char
         self.entries_count = c_uint32
 
     @classmethod
     def read(cls, file_handle):
         struct = cls()
-        struct.unk_1 = cls.read_buffer(file_handle, struct.unk_1)
-        struct.unk_2 = cls.read_buffer(file_handle, struct.unk_2)
-        struct.name_length = cls.read_buffer(file_handle, struct.name_length)
-        struct.name = cls.read_buffer(file_handle, struct.name * struct.name_length)
+        struct.owner_key = cls.read_buffer(file_handle, struct.owner_key)
+        struct.package_name_length = cls.read_buffer(file_handle, struct.package_name_length)
+        struct.package_name = cls.read_buffer(file_handle, struct.package_name * struct.package_name_length)
         struct.entries_count = cls.read_buffer(file_handle, struct.entries_count)
         return struct
 
     def serialize(self) -> bytes:
         data = b''
-        data += self._to_little(self.unk_1, 4)
-        data += self._to_little(self.unk_2, 4)
-        data += self._to_little(self.name_length, 4)
-        data += self.name.encode('ascii') if isinstance(self.name, str) else self.name # type: ignore
+        data += self._to_little(self.owner_key, 8)
+        data += self._to_little(self.package_name_length, 4)
+        data += self.package_name.encode('ascii') if isinstance(self.package_name, str) else self.package_name # type: ignore
         data += b"\0" # Null Terminator
         data += self._to_little(self.entries_count, 4)
         return data
@@ -101,13 +99,19 @@ class MK11ExternalTableEntry(Struct):
     _fields_ = [
         ("decompressed_size", c_uint64),
         ("compressed_size", c_uint64),
-        ("offset_internal", c_uint64),
-        ("offset_external", c_uint64),
+        ("decompressed_offset", c_uint64),
+        ("compressed_offset", c_uint64),
     ]
 
+    def __len__(self):
+        return self.entries_count
+
+
 class MK11Archive(FileReader):
-    def __init__(self, source):
+    def __init__(self, source, extra_source: Any = ""):
         super().__init__(source)
+        if extra_source:
+            self.psf_source = extra_source
         self.parsed = False
 
     def read_buffer(self, size):
@@ -117,45 +121,57 @@ class MK11Archive(FileReader):
         header = MK11AssetHeader.read(self.mm)
         return header
 
-    def parse_file_meta(self) -> str:
+    def parse_file_name(self) -> str:
         file_name_length = Struct.read_buffer(self.mm, c_uint32)
         file_name = Struct.read_buffer(
             self.mm, c_char * file_name_length
         ).decode()
         return file_name
 
-    def parse_file_table(self):
+    def parse_file_table(self, table_type):
         tables_count = Struct.read_buffer(self.mm, c_uint32)
-        tables = list(self.parse_filetable_tables(tables_count))
+        tables = list(self.parse_filetable_tables(tables_count, table_type))
         return tables
 
-    def parse_filetable_tables(self, count):
+    def parse_filetable_tables(self, count, table_type):
         for _ in range(count):
             table = MK11AssetExternalTable.read(self.mm)
             entries = list(self.parse_filetable_table_entries(table.entries_count))
             table.add_member("entries", entries)
             table.add_member("compression_flag", Struct.read_buffer(self.mm, c_uint32))
-            self.validate_filetable_table_entries(table)
+            self.validate_filetable_table_entries(table, table_type)
             yield table
 
     def parse_filetable_table_entries(self, count):
         yield from (MK11ExternalTableEntry.read(self.mm) for _ in range(count))    
 
     @classmethod
-    def validate_filetable_table_entries(cls, table):
-        compression = table.compression_flag
+    def validate_filetable_table_entries(cls, table, table_type):
+        neg = -1 & 0xFFFFFFFFFFFFFFFF
+        compression_flag = table.compression_flag
+        compression = CompressionType(compression_flag)
         for entry in table.entries:
-            if entry.offset_external == -1 & 0xFFFFFFFFFFFFFFFF:
-                if compression != 0:
-                    raise ValueError(f"Unknown Handling when no compression")
-                entry.add_member("location", "upk") # TODO: Change this, I believe it is wrong. -1 means no offset, compress == decompress means same file as table. Example: PSF Table -> PSF. Bulk Table -> UPK.
-            elif entry.offset_external == entry.offset_internal:
-                entry.add_member("location", "psf")
+            c_off = entry.compressed_offset
+            c_size = entry.compressed_size
+            d_off = entry.decompressed_offset
+            if c_off == d_off:
+                location = "psf"
+                if table_type != "psf":
+                    logging.getLogger("Midway").warning(f"PSF type detected but expected type was {table_type}!")
+            elif c_off == neg or c_size == neg: # -1
+                if compression_flag != 0:
+                    if c_off == neg:
+                        logging.getLogger("Midway").warning(f"No compression offset provided when compression set to {compression}!")
+                    if c_size == neg:
+                        logging.getLogger("Midway").warning(f"No compression size provided when compression set to {compression}!")
+                if c_off != c_size:
+                    raise NotImplementedError(f"I don't know what to do when c_off != c_size but one of them was -1!")
+                location = "bulk"
             else:
-                raise ValueError(
-                    f"Unknown scenario when file in psf but has a location in upk as well!"
-                )
-
+                # Most likely has both internal and external which is means internal is upk and external is original file, which is impossible.
+                raise NotImplementedError("I don't know what to do when extra data has compression/decompression offsets!")
+            entry.add_member("location", location)
+        
 class UETableEntryBase: # TODO: To be moved to UE_Common
     @property
     def file_name(self):
@@ -270,6 +286,7 @@ class MK11ExportTableEntry(MK11TableEntry, UETableEntryBase):
         string = ""
         if self.package:
             string += f"[{self.package}] "
+        string += f"{self.object_offset:0>8X} ({self.object_size:0>8X}) "
         string += self.path
         string += self.file_name
         if self.class_super:
@@ -278,6 +295,8 @@ class MK11ExportTableEntry(MK11TableEntry, UETableEntryBase):
 
     def __repr__(self) -> str:
         return (
+            f"offset={hex_s(self.object_offset)} "
+            f"size=({hex_s(self.object_size)}) "
             f"package={hex_s(self.object_main_package)} "
             f"folder={hex_s(self.object_outer_class)} "
             f"class={hex_s(self.object_class)} "

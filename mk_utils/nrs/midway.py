@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 from typing import Literal, Sequence, Type, Union
 
-from mk_utils.nrs.ue3_common import ClassHandler, MK11Archive, MK11ExportTableEntry, MK11ImportTableEntry, MK11TableEntry, MK11TableMeta
+from assets.mk_utils.utils.filereader import FileReader
+from mk_utils.nrs.ue3_common import ClassHandler, MK11Archive, MK11AssetExternalTable, MK11ExportTableEntry, MK11ImportTableEntry, MK11TableEntry, MK11TableMeta
 from mk_utils.nrs.games.mk11.enums import CompressionType
 from mk_utils.utils.structs import T, Struct
 
@@ -28,9 +29,9 @@ class MidwayAsset(MK11Archive):
     def parse(self, resolve: bool = True):
         # File Summary
         self.parse_summary()
-        self.file_name = self.parse_file_meta()
-        self.psf_tables = self.parse_file_table()
-        self.bulk_tables = self.parse_file_table()
+        self.file_name = self.parse_file_name()
+        self.psf_tables = self.parse_file_table("psf")
+        self.bulk_tables = self.parse_file_table("bulk")
         self.meta_size = self.mm.tell()  # Size of all header metas
         if self.meta_size != self.header.name_table.offset:
             raise ValueError(f"Size of header did not match expected! Size: {self.meta_size}, Expected: {self.header.name_table.offset}.")
@@ -56,6 +57,16 @@ class MidwayAsset(MK11Archive):
         errors = self.validate_exports()
         if errors:
             getLogger("Midway").warning(f"{len(errors)} Export issues detected! Proceed with caution.")
+            if len(errors) < 5:
+                for error in errors:
+                    getLogger("Midway").error(error)
+
+        errors = self.validate_bulks()
+        if errors:
+            getLogger("Midway").warning(f"{len(errors)} Bulk Data issues detected! Proceed with caution.")
+            if len(errors) < 5:
+                for error in errors:
+                    getLogger("Midway").error(error)
 
         self.parsed = True
 
@@ -69,11 +80,15 @@ class MidwayAsset(MK11Archive):
 
         logging.getLogger("Main").info(f"Saving {self.file_name}'s data to {save_dir}")
 
-        self.dump_exports(save_dir)
         if format != True:
             self.dump_tables(save_dir)
         if format != False:
             self.dump_tables(save_dir, formatted=True)
+        self.dump_extra_tables(save_dir)
+
+        self.dump_exports(save_dir)
+        self.dump_bulks(save_dir)
+        self.dump_psfs(save_dir) # Unsure if like this or combine
 
     def dump_exports(self, save_dir: str = "extracted"):
         output_dir = os.path.join(save_dir, self.file_name, "exports")
@@ -87,66 +102,157 @@ class MidwayAsset(MK11Archive):
             with open(file_out, "wb") as f:
                 f.write(data)
 
+    def _dump_table_entries(self, tables, mm_source, kind: str, save_dir: str):
+        output_dir = os.path.join(save_dir, self.file_name, kind + 's')
+
+        for i, table in enumerate(tables):
+            if not table.entries:
+                continue
+
+            compression_flag = table.compression_flag
+            compression = CompressionType(compression_flag).name
+            package = table.package_name.decode()  # type: ignore
+            package_dir = os.path.join(output_dir, package)
+            key = table.owner_key
+
+            # first_offset = table.entries[0].decompressed_offset
+            # out_dir = os.path.join(package_dir, f"{first_offset:0>8X}")
+            out_dir = os.path.join(package_dir, f"{key:0>8X}")
+            os.makedirs(out_dir, exist_ok=True)
+
+            logging.getLogger("Midway").debug(
+                f"Saving {kind.upper()} {i} - {key:0>8X} with {len(table.entries)} entries to {out_dir}"
+            )
+
+            for j, entry in enumerate(table.entries): # TODO: I think these should be combined into 1 file, need to check
+                if entry.location != kind:
+                    raise ValueError("Mismatch element with location!")
+
+                offset = entry.decompressed_offset
+                size = entry.decompressed_size
+
+                mm_source.seek(offset, 0)
+                data = mm_source.read(size)
+
+                if compression_flag:
+                    # TODO: Handle compression here
+                    raise NotImplementedError(f"Compressed items are not yet supported")
+
+                with open(os.path.join(out_dir, str(j)), "wb") as f:
+                    f.write(data)
+
+    def dump_bulks(self, save_dir: str = "extracted"):
+        if not self.bulk_tables:
+            return
+        self._dump_table_entries(self.bulk_tables, self.mm, "bulk", save_dir)
+
+    def dump_psfs(self, save_dir: str = "extracted"):
+        if not self.psf_tables:
+            return
+        if not self.psf_source:
+            raise ValueError("No PSF file to read from!")
+        if isinstance(self.psf_source, str) and os.path.isdir(self.psf_source):
+            psf_file = FileReader(os.path.join(self.psf_source, self.file_name + ".psf"))
+        else:
+            psf_file = FileReader(self.psf_source)
+
+        self._dump_table_entries(self.psf_tables, psf_file.mm, "psf", save_dir)
+
     def read_export(self, export: MK11ExportTableEntry):
         self.mm.seek(export.object_offset, 0)
         data = self.mm.read(export.object_size)
         return data
 
     def validate_exports(self):
-        errors = []
+        if not self.export_table:          # nothing → nothing to check
+            return []
 
         start = self.header.exports_location
-        end = (
-            self.header.bulk_location
-            if hasattr(self.header, "bulk_location")
-            else self.mm.size()
+        end = getattr(self.header, "bulk_location", self.mm.size()) # TODO: This is not bulks location this is psf location, which in MK11 is end of file
+        errors = []
+
+        # ── flatten & sort (offset, size, name) ──────────────────────────────────
+        exports = sorted(
+            (e.object_offset, e.object_size, e.full_name) for e in self.export_table
         )
 
-        used_ranges = []
+        prev_off, prev_end, prev_name = start, start, None   # active range
 
-        for export in self.export_table:
-            offset = export.object_offset
-            size = export.object_size
-
-            # 1. Offset bounds check
-            if not (start <= offset < end):
-                errors.append(
-                    f"{export.full_name}: Offset 0x{offset:X} out of bounds [{start:X}, {end:X})"
-                )
+        for off, sz, name in exports:
+            # 1-2. bounds
+            if not (start <= off < end):
+                errors.append(f"{name}: Offset 0x{off:X} out of bounds [{start:X}, {end:X})")
+                continue
+            if off + sz > end:
+                errors.append(f"{name}: Size 0x{sz:X} at 0x{off:X} exceeds end 0x{end:X}")
                 continue
 
-            # 2. Size bounds check
-            if offset + size > end:
+            # 3. overlap / gap  (compare only with active range)
+            if off < prev_end:   # overlap
                 errors.append(
-                    f"{export.full_name}: Size 0x{size:X} at 0x{offset:X} exceeds end 0x{end:X}"
+                    f"{name} [0x{off:X}–0x{off+sz:X}) overlaps with "
+                    f"{prev_name} [0x{prev_off:X}–0x{prev_end:X})"
                 )
-                continue
+            elif off > prev_end: # gap
+                errors.append(f"Unused gap: [0x{prev_end:X}–0x{off:X}) before {name}")
 
-            # 3. Overlap check
-            for o_start, o_end, o_name in used_ranges:
-                if offset < o_end and offset + size > o_start:
+            # extend coverage window if needed
+            if off + sz > prev_end:
+                prev_off, prev_end, prev_name = off, off + sz, name
+
+        # 4. early-finish
+        if prev_end < end:
+            if self.bulk_tables:
+                first_bulk = self.bulk_tables[0].entries[0].decompressed_offset
+                if first_bulk != prev_end:
                     errors.append(
-                        f"{export.full_name} [0x{offset:X}–0x{offset+size:X}) overlaps with {o_name} [0x{o_start:X}–0x{o_end:X})"
+                        f"Export data ends early at 0x{prev_end:X}, expected bulk at 0x{first_bulk:X}"
                     )
-                    break
+            else:
+                errors.append(f"Export data ends early at 0x{prev_end:X}, expected 0x{end:X}")
 
-            used_ranges.append((offset, offset + size, export.full_name))
+        return errors
 
-        # Sort ranges by offset
-        used_ranges.sort()
+    def validate_bulks(self):
+        """Return a list of validation errors for bulk tables."""
+        if not self.bulk_tables:  # no data → no errors
+            return []
 
-        # 4. Gap check
-        current = start
-        for o_start, o_end, o_name in used_ranges:
-            if o_start > current:
-                errors.append(f"Unused gap: [0x{current:X}–0x{o_start:X}) before {o_name}")
-            current = max(current, o_end)
+        start = self.bulk_tables[0].entries[0].decompressed_offset
+        end = self.mm.size()
+        errors = []
 
-        # 5. Early finish check
-        if current < end:
-            errors.append(
-                f"Export data ends early at 0x{current:X}, expected up to 0x{end:X}"
-            )
+        # ---- 1. Flatten & sort --------------------------------------------------
+        entries = sorted(  # (offset, size)
+            (e.decompressed_offset, e.decompressed_size)
+            for tbl in self.bulk_tables
+            for e in tbl.entries
+        )
+
+        # ---- 2. Single sweep ----------------------------------------------------
+        prev_end = start
+        for off, sz in entries:
+            # bounds
+            if not (start <= off < end):
+                errors.append(f"Offset 0x{off:X} out of bounds [{start:X}, {end:X})")
+                continue
+            if off + sz > end:
+                errors.append(f"Size 0x{sz:X} at 0x{off:X} exceeds end 0x{end:X}")
+                continue
+
+            # overlap or gap (only compare with previous interval)
+            if off < prev_end:  # overlap
+                errors.append(
+                    f"[0x{off:X}–0x{off+sz:X}) overlaps with " f"[0x{off:X}–0x{prev_end:X})"
+                )
+            elif off > prev_end:  # gap
+                errors.append(f"Unused gap: [0x{prev_end:X}–0x{off:X})")
+
+            prev_end = max(prev_end, off + sz)
+
+        # ---- 3. Early-finish check ---------------------------------------------
+        if prev_end < end:
+            errors.append(f"Export data ends early at 0x{prev_end:X}, expected 0x{end:X}")
 
         return errors
 
@@ -227,6 +333,10 @@ class MidwayAsset(MK11Archive):
         self.dump_table(location, self.import_table, formatted)
         self.dump_table(location, self.export_table, formatted)
 
+    def dump_extra_tables(self, location):
+        self.dump_extra_table(location, self.psf_tables, "psf")
+        self.dump_extra_table(location, self.bulk_tables, "bulk")
+
     def dump_names(self, location):
         location = os.path.join(location, self.file_name)
         os.makedirs(location, exist_ok=True)
@@ -236,6 +346,54 @@ class MidwayAsset(MK11Archive):
         with open(file_out, "w+", encoding="utf-8") as f:
             for i, name in enumerate(self.name_table):
                 f.write(f"{hex(i)[2:].upper()}:\t{name}\n")
+
+    def dump_extra_table(self, location, table: Sequence[MK11AssetExternalTable], table_type):
+        if not table:
+            return
+
+        location = os.path.join(location, self.file_name)
+        os.makedirs(location, exist_ok=True)
+
+        file_path = os.path.join(location, f"{table_type}table.txt")
+        logging.getLogger("Midway").debug(f"Saving {self.file_name}'s {table[0].__class__.__name__}::{table_type.upper()} to {file_path}")
+
+        # neg = -1 & 0xFFFFFFFFFFFFFFFF
+        with open(file_path, "w+", encoding="utf-8") as f:
+            counter = 0
+            for i, table_entry in enumerate(table):
+                package = table_entry.package_name.decode() # type: ignore
+                compression_flag = table_entry.compression_flag
+                compression = CompressionType(compression_flag).name
+                for j, entry in enumerate(table_entry.entries):
+                    c_off, d_off, c_size, d_size = entry.compressed_offset, entry.decompressed_offset, entry.compressed_size, entry.decompressed_size
+                    location = entry.location
+                    string = ""
+                    string += f"{counter:X}: {package} {i:X}: #{j:X} {c_off:0>8X} {c_size:0>8X} - {d_off:0>8X} {d_size:0>8X} | "
+
+                    string += f"Compression: {compression}"
+                    string += " | "
+
+                    string += location.upper()
+
+                    # if c_off == d_off:
+                    #     string += "External"
+                    #     if table_type != "psf":
+                    #         logging.getLogger("Midway").warning(f"{table_type.upper()} type detected for index {i} but expected type was PSF!")
+                    # elif c_off == neg or c_size == neg: # -1
+                    #     if compression_flag != 0:
+                    #         if c_off == neg:
+                    #             logging.getLogger("Midway").warning(f"No compression offset provided when compression set to {compression}!")
+                    #         if c_size == neg:
+                    #             logging.getLogger("Midway").warning(f"No compression size provided when compression set to {compression}!")
+                    #     if c_off != c_size:
+                    #         raise NotImplementedError(f"I don't know what to do when c_off != c_size but one of them was -1!")
+                    #     string += "Internal"
+                    # else:
+                    #     # Most likely has both internal and external which is means internal is upk and external is original file, which is impossible.
+                    #     raise NotImplementedError("I don't know what to do when extra data has compression/decompression offsets!")
+
+                    f.write(string + "\n")
+                    counter += 1
 
     def dump_table(self, location, table: Sequence[MK11TableEntry], formatted: bool = False):
         if not table:

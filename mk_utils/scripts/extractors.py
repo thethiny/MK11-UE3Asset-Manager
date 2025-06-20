@@ -1,17 +1,17 @@
 import logging
-from typing import List
+from typing import List, Tuple
 
 from mk_utils.nrs.archive import MK11UE3Asset
 from mk_utils.nrs.ue3_common import get_handlers
 
 ClassHandlers = get_handlers()
 
-def extract_all(files: List[str], output_dir: str = "extracted"):
+def extract_all(files: List[Tuple[str, str]], output_dir: str = "extracted"):
     saved = []
-    for file in files:
+    for file, psf_source in files:
         logging.getLogger("Scripts::Extractors").info(f"Parsing {file}")
 
-        mk11_asset = MK11UE3Asset(file)
+        mk11_asset = MK11UE3Asset(file, psf_source)
         midway_file = mk11_asset.parse_all(save_path=output_dir)
 
 
