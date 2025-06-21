@@ -482,7 +482,7 @@ class ClassHandler(FileReader): # TODO: To be moved later to UE_Common or UE_Uti
         os.makedirs(save_path, exist_ok=True)
         return os.path.join(save_path, export.file_name)
 
-    def save(self, data: Any, export: UETableEntryBase, asset_name: str, save_path: str) -> str:
+    def save(self, data: Any, export: UETableEntryBase, asset_name: str, save_path: str, asset_instance) -> str:
         raise NotImplementedError(f"Implement me")
 
     @classmethod

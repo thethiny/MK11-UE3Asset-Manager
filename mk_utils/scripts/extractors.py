@@ -6,7 +6,7 @@ from mk_utils.nrs.ue3_common import get_handlers
 
 ClassHandlers = get_handlers()
 
-def extract_all(files: List[Tuple[str, str]], output_dir: str = "extracted"):
+def extract_all(files: List[Tuple[str, str]], output_dir: str = "extracted", overwrite = False):
     saved = []
     for file, psf_source in files:
         logging.getLogger("Scripts::Extractors").info(f"Parsing {file}")
@@ -23,6 +23,6 @@ def extract_all(files: List[Tuple[str, str]], output_dir: str = "extracted"):
 
             handler_class = handler["handler_class"]
 
-            saved_file = midway_file.parse_and_save_export(export, handler_class, output_dir)
+            saved_file = midway_file.parse_and_save_export(export, handler_class, output_dir, overwrite)
             saved.append(saved_file)
     return saved

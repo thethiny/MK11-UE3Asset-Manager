@@ -25,7 +25,7 @@ class DatabaseHandler(ClassHandler):
         save_path = super().make_save_path(export, asset_name, save_path)
         return save_path + ".json"
 
-    def save(self, data, export, asset_name, save_dir):
+    def save(self, data, export, asset_name, save_dir, *args, **kwargs):
         save_file = self.make_save_path(export, asset_name, save_dir)
         
         with open(save_file, "w+") as f:

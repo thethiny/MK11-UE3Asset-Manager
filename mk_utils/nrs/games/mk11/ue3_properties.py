@@ -134,6 +134,7 @@ class DWordProperty(UProperty):
         value = Struct.read_buffer(file_handle, read_size)
         return value
 
+class QWordProperty(DWordProperty): ...
 
 class MultiDWordProperty(DWordProperty):
     # This class is just for a very specific usecase and is unofficial
@@ -314,6 +315,7 @@ PropertyMap: Dict[str, Type[UProperty]] = {
     "ArrayProperty": ArrayProperty,
     "EnumProperty": EnumProperty,
     "DWordProperty": DWordProperty,
+    "QWordProperty": QWordProperty,
     "MapProperty": MapProperty,
     "NameProperty": NameProperty,
 }

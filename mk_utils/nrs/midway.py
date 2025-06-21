@@ -501,5 +501,5 @@ class MidwayAsset(MK11Archive):
 
         parsed = handler_obj.parse()
 
-        saved_file = handler_obj.save(parsed, export, self.file_name, save_dir)
+        saved_file = handler_obj.save(parsed, export, self.file_name, save_dir, self)
         return saved_file
