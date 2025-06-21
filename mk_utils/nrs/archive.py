@@ -1,11 +1,10 @@
-from ctypes import addressof, c_byte, c_char, c_uint32, c_uint64, sizeof, string_at
+from ctypes import addressof, c_char, c_uint32, c_uint64, sizeof, string_at
 from logging import getLogger
 import logging
 import os
 from typing import Any, Type
 
 from mk_utils.nrs.ue3_common import MK11AssetHeader, MK11Archive
-from mk_utils.nrs.compression.oodle import OodleV5
 from mk_utils.nrs.games.mk11.enums import CompressionType
 from mk_utils.nrs.midway import MidwayAsset
 from mk_utils.utils.structs import T, Struct
@@ -80,22 +79,6 @@ class MK11AssetPackage(Struct):
         base = super().__str__()
         return f"{base}\npackage_name = {name}"
 
-class MK11BlockHeader(Struct):
-    __slots__ = ()
-    _fields_ = [
-        ("magic", c_uint32),
-        ("padding", c_uint32),
-        ("chunk_size", c_uint64),
-        ("compressed_size", c_uint64),
-        ("decompressed_size", c_uint64),
-    ]
-
-class MK11BlockChunkHeader(Struct):
-    __slots__ = ()
-    _fields_ = [
-        ("compressed_size", c_uint64),
-        ("decompressed_size", c_uint64),
-    ]
 
 class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game version and call the appropriate archiver
     def __init__(self, path: str, extra_path: str = ""):
@@ -104,10 +87,7 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
     def parse(self):
         self.header = self.parse_header()
         self.compression_mode = CompressionType(self.header.compression_flag)
-        if self.compression_mode >= CompressionType.PS4:
-            self.compressor = OodleV5()
-        else:
-            raise NotImplementedError(f"Only Oodle Compression is supported")
+        self.compressor = self.get_compressor(self.compression_mode)
 
         self.packages = self.parse_packages()
         self.packages_extra = self.parse_packages() # Same as psf_table but one is in UE3 Asset one is in Midway Asset
@@ -116,11 +96,11 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
         self.psf_tables = self.parse_file_table("psf") # Total count must match packages_extra and they should belong in there
         self.bulk_tables = self.parse_file_table("bulk")
         self.meta_size = self.mm.tell() # Size of all header metas
-        
+
         self.validate_psf_with_extra()
 
         self.parsed = True
-        
+
     def validate_psf_with_extra(self):
         def entry_pairs(psf_tables):
             for psf_table in psf_tables:
@@ -139,12 +119,16 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
             compressed_match = psf_entry.compressed_offset == pkg_entry.compressed_offset
             if not compressed_match:
                 raise ValueError(f"Index {idx} {psf_entry.compressed_offset == pkg_entry.compressed_offset=}")
-            
+
             decompressed_match = psf_entry.decompressed_offset == pkg_entry.decompressed_offset
             if not decompressed_match:
-                raise ValueError(f"Index {idx} {psf_entry.decompressed_offset == pkg_entry.decompressed_offset=}")
-            
-            
+                # I think it's safe to ignore this because the package contains the 
+                # decompressed offset in case some other file uses the package and finds that it's already decompressed.
+                # This allows the game to skip the decompression process all over again and just reference a cached file that has
+                # everything already decompressed.
+                # In other words: if pgk->decompressed_offset exists -> use, else decompress.
+                getLogger("FArchive").warning(f"Index {idx} {psf_entry.decompressed_offset == pkg_entry.decompressed_offset=}")
+
         try:
             next(psf_iter)
             raise ValueError("psf_tables has extra entries not matched in packages_extra")
@@ -156,8 +140,6 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
             raise ValueError("packages_extra has extra entries not matched in psf_tables")
         except StopIteration:
             pass
-
-
 
     def dump(self, save_path: str):
         save_path = os.path.join(save_path, self.file_name)
@@ -200,30 +182,31 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
         yield from (MK11AssetSubPackage.read(self.mm) for _ in range(count))
 
     def deserialize_block(self):
-        block = MK11BlockHeader.read(self.mm)
-        decompressed_data = self.decompress_block(block)
-        return decompressed_data
+        return super().deserialize_block(self.mm, self.compressor)
+    #     block = MK11BlockHeader.read(self.mm)
+    #     decompressed_data = self.decompress_block(block)
+    #     return decompressed_data
 
-    def parse_blocks_chunk(self, block: MK11BlockHeader):
-        total_read = 0
-        chunk_headers = []
-        while total_read < block.compressed_size:
-            chunk_header = MK11BlockChunkHeader.read(self.mm)
-            chunk_headers.append(chunk_header)
-            total_read += chunk_header.compressed_size
+    # def parse_blocks_chunk(self, block: MK11BlockHeader):
+    #     total_read = 0
+    #     chunk_headers = []
+    #     while total_read < block.compressed_size:
+    #         chunk_header = MK11BlockChunkHeader.read(self.mm)
+    #         chunk_headers.append(chunk_header)
+    #         total_read += chunk_header.compressed_size
 
-        for chunk_header in chunk_headers:
-            chunk_data = Struct.read_buffer(self.mm, c_byte * chunk_header.compressed_size)
-            yield chunk_header, chunk_data
+    #     for chunk_header in chunk_headers:
+    #         chunk_data = Struct.read_buffer(self.mm, c_byte * chunk_header.compressed_size)
+    #         yield chunk_header, chunk_data
 
-    def decompress_block(self, block: MK11BlockHeader):
-        data = b''
-        for chunk_header, chunk_data in self.parse_blocks_chunk(block):
-            decompressed_chunk = self.compressor.decompress(
-                chunk_data, chunk_header.decompressed_size
-            )
-            data += decompressed_chunk
-        return data
+    # def decompress_block(self, block: MK11BlockHeader):
+    #     data = b''
+    #     for chunk_header, chunk_data in self.parse_blocks_chunk(block):
+    #         decompressed_chunk = self.compressor.decompress(
+    #             chunk_data, chunk_header.decompressed_size
+    #         )
+    #         data += decompressed_chunk
+    #     return data
 
     def to_midway(self):
         buffer = self._MidwayBuilder.from_mk11(self)

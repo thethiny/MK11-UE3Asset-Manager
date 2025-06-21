@@ -9,6 +9,7 @@ class CompressionType(IntEnum):
     LZX   = 0x0004
     PFS   = 0x0008
     PS4   = 0x0010
+    UNK   = 0x0020
     XBX   = 0x0040
     OODLE = 0x0100
 

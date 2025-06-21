@@ -1,10 +1,12 @@
 import os
 import logging
 
-from ctypes import c_char, c_int32, c_ubyte, c_uint32, c_uint16, c_uint64
+from ctypes import c_byte, c_char, c_int32, c_ubyte, c_uint32, c_uint16, c_uint64
 from typing import Any, Union, Iterable, List, Tuple, Type, TypedDict
 
-from assets.mk_utils.nrs.games.mk11.enums import CompressionType
+from mk_utils.nrs.compression.base import CompressionBase
+from mk_utils.nrs.compression.oodle import OodleV5
+from mk_utils.nrs.games.mk11.enums import CompressionType
 from mk_utils.utils.filereader import FileReader
 from mk_utils.utils.structs import Struct, hex_s
 from requests.utils import CaseInsensitiveDict
@@ -25,6 +27,25 @@ class GUID(Struct):
         d3 = f"{self.Data3:04X}"
         d4 = "".join(f"{b:02X}" for b in self.Data4)
         return f"{d1}-{d2}-{d3}-{d4[:4]}-{d4[4:]}"
+
+
+class MK11BlockHeader(Struct):
+    __slots__ = ()
+    _fields_ = [
+        ("magic", c_uint32),
+        ("padding", c_uint32),
+        ("chunk_size", c_uint64),
+        ("compressed_size", c_uint64),
+        ("decompressed_size", c_uint64),
+    ]
+
+
+class MK11BlockChunkHeader(Struct):
+    __slots__ = ()
+    _fields_ = [
+        ("compressed_size", c_uint64),
+        ("decompressed_size", c_uint64),
+    ]
 
 
 class MK11TableMeta(Struct):
@@ -70,7 +91,7 @@ class MK11AssetExternalTable(Struct):
     def __init__(self, *args: Any, **kw: Any) -> None:
         super().__init__(*args, **kw)
 
-        self.owner_key = c_uint64
+        self.reference_key = c_uint64
         self.package_name_length = c_uint32
         self.package_name = c_char
         self.entries_count = c_uint32
@@ -78,7 +99,7 @@ class MK11AssetExternalTable(Struct):
     @classmethod
     def read(cls, file_handle):
         struct = cls()
-        struct.owner_key = cls.read_buffer(file_handle, struct.owner_key)
+        struct.reference_key = cls.read_buffer(file_handle, struct.reference_key)
         struct.package_name_length = cls.read_buffer(file_handle, struct.package_name_length)
         struct.package_name = cls.read_buffer(file_handle, struct.package_name * struct.package_name_length)
         struct.entries_count = cls.read_buffer(file_handle, struct.entries_count)
@@ -86,7 +107,7 @@ class MK11AssetExternalTable(Struct):
 
     def serialize(self) -> bytes:
         data = b''
-        data += self._to_little(self.owner_key, 8)
+        data += self._to_little(self.reference_key, 8)
         data += self._to_little(self.package_name_length, 4)
         data += self.package_name.encode('ascii') if isinstance(self.package_name, str) else self.package_name # type: ignore
         data += b"\0" # Null Terminator
@@ -143,7 +164,51 @@ class MK11Archive(FileReader):
             yield table
 
     def parse_filetable_table_entries(self, count):
-        yield from (MK11ExternalTableEntry.read(self.mm) for _ in range(count))    
+        yield from (MK11ExternalTableEntry.read(self.mm) for _ in range(count))
+
+    def generate_map_from_table(self, tables):
+        result = {}
+        for table in tables:
+            key = table.reference_key
+            if key in result:
+                raise ValueError(f"Duplicate reference_key: {key}")
+            result[key] = table
+        return result
+
+    @classmethod
+    def deserialize_block(cls, mm, compression):
+        block = MK11BlockHeader.read(mm)
+        decompressed_data = cls.decompress_block(block, compression, mm)
+        return decompressed_data
+
+    @classmethod
+    def decompress_block(cls, block: MK11BlockHeader, compression: Union[int, CompressionType, CompressionBase], mm):
+        data = b""
+        if isinstance(compression, CompressionBase):
+            compressor = compression
+        else:
+            compressor = cls.get_compressor(compression)
+        for chunk_header, chunk_data in cls.parse_blocks_chunk(block, mm):
+            decompressed_chunk = compressor.decompress(
+                chunk_data, chunk_header.decompressed_size
+            )
+            data += decompressed_chunk
+        return data
+
+    @classmethod
+    def parse_blocks_chunk(cls, block: MK11BlockHeader, mm):
+        total_read = 0
+        chunk_headers = []
+        while total_read < block.compressed_size:
+            chunk_header = MK11BlockChunkHeader.read(mm)
+            chunk_headers.append(chunk_header)
+            total_read += chunk_header.compressed_size
+
+        for chunk_header in chunk_headers:
+            chunk_data = Struct.read_buffer(
+                mm, c_byte * chunk_header.compressed_size
+            )
+            yield chunk_header, chunk_data
 
     @classmethod
     def validate_filetable_table_entries(cls, table, table_type):
@@ -171,7 +236,16 @@ class MK11Archive(FileReader):
                 # Most likely has both internal and external which is means internal is upk and external is original file, which is impossible.
                 raise NotImplementedError("I don't know what to do when extra data has compression/decompression offsets!")
             entry.add_member("location", location)
-        
+
+    @classmethod
+    def get_compressor(cls, compression: Union[int, CompressionType]):
+        if isinstance(compression, int):
+            compression = CompressionType(compression)
+        if compression >= CompressionType.PS4:
+            return OodleV5()
+        else:
+            raise NotImplementedError(f"Only Oodle Compression is supported")
+
 class UETableEntryBase: # TODO: To be moved to UE_Common
     @property
     def file_name(self):

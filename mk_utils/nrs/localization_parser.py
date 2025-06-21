@@ -4,9 +4,9 @@ import logging
 import os
 from Crypto.Cipher import AES
 
-from assets.mk_utils.utils import split_path
-from assets.mk_utils.utils.filereader import FileReader
-from assets.mk_utils.utils.structs import Struct
+from mk_utils.utils import split_path
+from mk_utils.utils.filereader import FileReader
+from mk_utils.utils.structs import Struct
 
 
 class LocalizationParser(FileReader):
