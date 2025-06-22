@@ -1,8 +1,19 @@
 import struct
 from pathlib import Path
 from typing import Sequence, Union, List
+from dds import decode_dds
 
-BLOCK_BYTES = 16  # BC7 block = 16 bytes (4×4 px)
+# Map DXGI format to block size
+DXGI_BLOCK_SIZE = {
+    80: 8,  # BC4_UNORM
+    90: 8,  # BC4_SNORM
+    83: 16,  # BC5_UNORM
+    91: 16,  # BC5_SNORM
+    95: 16,  # BC6H_UF16
+    96: 16,  # BC6H_SF16
+    98: 16,  # BC7_UNORM
+    99: 16,  # BC7_UNORM_SRGB
+}
 
 
 def _collect_mip_files(src: Union[str, Path, Sequence[Union[str, Path]]]) -> List[Path]:
@@ -19,7 +30,10 @@ def _collect_mip_files(src: Union[str, Path, Sequence[Union[str, Path]]]) -> Lis
 
 
 def _make_header(w: int, h: int, mips: int, dxgi: int, array_size: int) -> bytes:
-    # DDS header constants
+    block_bytes = DXGI_BLOCK_SIZE.get(dxgi)
+    if not block_bytes:
+        raise ValueError(f"Unsupported DXGI format: {dxgi}")
+
     DDSD_CAPS = 0x1
     DDSD_HEIGHT = 0x2
     DDSD_WIDTH = 0x4
@@ -37,54 +51,74 @@ def _make_header(w: int, h: int, mips: int, dxgi: int, array_size: int) -> bytes
         flags |= DDSD_MIPMAPCOUNT
         caps |= DDSCAPS_MIPMAP | DDSCAPS_COMPLEX
 
-    # Size in bytes of the top mip level
     blocks_w = (w + 3) // 4
     blocks_h = (h + 3) // 4
-    linear_size = blocks_w * blocks_h * BLOCK_BYTES
+    linear_size = blocks_w * blocks_h * block_bytes
 
     header = struct.pack(
         "<4s I 6I 11I 8I 5I",
-        b"DDS ",
-        124,
-        flags,
-        h,
-        w,
-        linear_size,
-        0,
-        mips,
-        *(0,) * 11,  # reserved1[11]
-        32,
-        0x4,
-        struct.unpack("<I", b"DX10")[0],
-        *(0,) * 5,  # bit masks (unused for BC formats)
-        caps,
-        0,
-        0,
-        0,
-        0,
+        b"DDS ", 124,
+        flags, h, w, linear_size, 0, mips,
+        *(0,) * 11,
+        32, 0x4, struct.unpack("<I", b"DX10")[0],
+        *(0,) * 5,
+        caps, 0, 0, 0, 0,
     )
-    dx10 = struct.pack("<5I", dxgi, 3, 0, array_size, 0)  # 3 = TEXTURE2D
+    dx10 = struct.pack("<5I", dxgi, 3, 0, array_size, 0)
     return header + dx10
 
 
-def make_bc7_dds_data(source: Union[str, Path, Sequence[Union[str, Path]]],
+def make_dds_data(
+    source: Union[str, Path, Sequence[Union[str, Path]]],
     width: int,
     height: int,
     dxgi_format: int = 98,
     array_size: int = 1,
-): 
+):
     mip_files = _collect_mip_files(source)
     mip_count = len(mip_files)
-    data = b""
-    for mip in mip_files:
-        data += mip.read_bytes()
+    data = b"".join(f.read_bytes() for f in mip_files)
 
     header = _make_header(width, height, mip_count, dxgi_format, array_size)
-
     return header + data
 
 
-def write_bc7_dds(
+def make_png_data(
+    source: Union[str, Path, Sequence[Union[str, Path]]],
+    width: int,
+    height: int,
+    dxgi_format: int = 98,
+    array_size: int = 1,
+):
+    mip_files = _collect_mip_files(source)
+    mip_count = len(mip_files)
+    full_data = b""
+    first_mip_data = b""
+
+    for i, mip in enumerate(mip_files):
+        mip_bytes = mip.read_bytes()
+        full_data += mip_bytes
+        if i == 0:
+            first_mip_data = mip_bytes
+
+    header = _make_header(width, height, mip_count, dxgi_format, array_size)
+    dds_data = header + full_data
+
+    return dds_data, decode_dds(header + first_mip_data)
+
+
+def make_png_from_data(
+    raw_data: bytes,
+    width: int,
+    height: int,
+    dxgi_format: int = 98,
+    array_size: int = 1,
+):
+    header = _make_header(width, height, 1, dxgi_format, array_size)
+    return decode_dds(header + raw_data)
+
+
+def write_dds(
     source: Union[str, Path, Sequence[Union[str, Path]]],
     width: int,
     height: int,
@@ -92,11 +126,6 @@ def write_bc7_dds(
     array_size: int = 1,
     output: Union[str, Path, None] = None,
 ) -> Path:
-    """
-    Wrap raw BC7 block data (and optional mip files) in a DDS container.
-
-    Returns the Path of the created .dds file.
-    """
     mip_files = _collect_mip_files(source)
     mip_count = len(mip_files)
     data = b"".join(f.read_bytes() for f in mip_files)
@@ -104,7 +133,7 @@ def write_bc7_dds(
     header = _make_header(width, height, mip_count, dxgi_format, array_size)
 
     if output is None:
-        base = mip_files[0] if mip_files else Path(source)  # type: ignore
+        base = mip_files[0] if mip_files else Path(source) # type: ignore
         out_name = base.stem + ".dds" if base.is_file() else base.name + ".dds"
         output = base.parent / out_name
 

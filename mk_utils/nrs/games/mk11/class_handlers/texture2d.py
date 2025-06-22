@@ -1,8 +1,9 @@
 from ctypes import c_uint32, c_uint64
 from enum import IntEnum
 import json
+import logging
 import os
-from mk_utils.nrs.games.mk11.class_handlers.bc7 import make_bc7_dds_data
+from mk_utils.nrs.games.mk11.class_handlers.bc7 import make_png_data
 from mk_utils.nrs.games.mk11.ue3_properties import UProperty
 from mk_utils.nrs.ue3_common import ClassHandler, MK11ExportTableEntry
 from mk_utils.utils.structs import Struct
@@ -184,11 +185,6 @@ class Texture2DHandler(ClassHandler):
         return file_path
 
     def save(self, data, export, asset_name, save_dir, instance, *args, **kwargs):
-        save_file = self.make_save_path(export, asset_name, save_dir)
-
-        with open(save_file, "w+") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-
         image_file = self.make_texture_path(export, asset_name, save_dir)
         format = EPixelFormat[data["meta"]["Format"].split("::")[-1]]
         bulk_key = data["meta"]["CookedBulkDataOwnerKey"]
@@ -204,13 +200,41 @@ class Texture2DHandler(ClassHandler):
 
         package_name = bulk_pack.package_name.decode()
 
-        if format == EPixelFormat.PF_BC7:
+        if format in {
+            # EPixelFormat.PF_BC4,
+            EPixelFormat.PF_BC5,
+            EPixelFormat.PF_BC6,
+            EPixelFormat.PF_BC7,
+        }:
             raw_bytes_folder = self.get_dds_path(asset_name, package_name, bulk_key, save_dir, kind)
-            image_data = make_bc7_dds_data(raw_bytes_folder, data["meta"]["SizeX"], data["meta"]["SizeY"])
+            dxgi_map = {
+                EPixelFormat.PF_BC4: 80,   # DXGI_FORMAT_BC4_UNORM
+                EPixelFormat.PF_BC5: 83,   # DXGI_FORMAT_BC5_UNORM
+                EPixelFormat.PF_BC6: 95,  # DXGI_FORMAT_BC6H_UF16
+                EPixelFormat.PF_BC7: 98,   # DXGI_FORMAT_BC7_UNORM
+            }
+            dxgi_format = dxgi_map[format]
+            image_data, png_data = make_png_data(
+                raw_bytes_folder,
+                data["meta"]["SizeX"],
+                data["meta"]["SizeY"],
+                dxgi_format=dxgi_format
+            )
         else:
-            raise NotImplementedError(f"Texture2D Format {format.name} is not yet supported!")
+            logging.getLogger("Texture2DHandler").warning(f"Texture2D Format {format.name} is not yet supported!")
+            return
 
-        with open(image_file, "wb") as f:
-            f.write(image_data)
+
+        if image_data:
+            with open(image_file, "wb") as f:
+                f.write(image_data)
+        if png_data:
+            png_data.save(image_file.rsplit(".", 1)[0] + ".png")
+
+        save_file = self.make_save_path(export, asset_name, save_dir)
+        # Save json last cuz it's what determines success
+        with open(save_file, "w+") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+        
 
         return save_file
