@@ -35,20 +35,22 @@ class MidwayAsset(MK11Archive):
         else:
             return FileReader(self.psf_source)
 
-    def parse(self, resolve: bool = True):
+    def parse(self, resolve: bool = True, skip_bulk: bool = False):
         # File Summary
         self.parse_summary()
         self.file_name = self.parse_file_name()
-        self.psf_tables = self.parse_file_table("psf")
-        self.bulk_tables = self.parse_file_table("bulk")
-        self.psf_map = self.generate_map_from_table(self.psf_tables)
-        self.bulk_map = self.generate_map_from_table(self.bulk_tables)
-        self.meta_size = self.mm.tell()  # Size of all header metas
-        if self.psf_tables:
-            self.psf_reader = self.get_psf_reader()
+        if not skip_bulk:
+            self.psf_tables = self.parse_file_table("psf")
+            self.bulk_tables = self.parse_file_table("bulk")
+            self.psf_map = self.generate_map_from_table(self.psf_tables)
+            self.bulk_map = self.generate_map_from_table(self.bulk_tables)
+            if self.psf_tables:
+                self.psf_reader = self.get_psf_reader()
+                
+            self.meta_size = self.mm.tell()  # Size of all header metas
 
-        if self.meta_size != self.header.name_table.offset:
-            raise ValueError(f"Size of header did not match expected! Size: {self.meta_size}, Expected: {self.header.name_table.offset}.")
+            if self.meta_size != self.header.name_table.offset:
+                raise ValueError(f"Size of header did not match expected! Size: {self.meta_size}, Expected: {self.header.name_table.offset}.")
 
         self.name_table = list(self.parse_name_table())
         if self.mm.tell() != self.header.import_table.offset:
@@ -68,28 +70,29 @@ class MidwayAsset(MK11Archive):
             self.print_resolves(self.import_table)
             self.print_resolves(self.export_table)
 
-        errors = self.validate_exports()
+        errors = self.validate_exports(skip_bulk=skip_bulk)
         if errors:
             getLogger("Midway").warning(f"{len(errors)} Export issues detected! Proceed with caution.")
             if len(errors) < 5:
                 for error in errors:
                     getLogger("Midway").error(error)
+                    
+        if not skip_bulk:
+            errors = self.validate_bulks()
+            if errors:
+                getLogger("Midway").warning(f"{len(errors)} Bulk Data issues detected! Proceed with caution.")
+                if len(errors) < 5:
+                    for error in errors:
+                        getLogger("Midway").error(error)
 
-        errors = self.validate_bulks()
-        if errors:
-            getLogger("Midway").warning(f"{len(errors)} Bulk Data issues detected! Proceed with caution.")
-            if len(errors) < 5:
-                for error in errors:
-                    getLogger("Midway").error(error)
-
-        errors = self.validate_psfs()
-        if errors:
-            getLogger("Midway").warning(
-                f"{len(errors)} Bulk Data issues detected! Proceed with caution."
-            )
-            if len(errors) < 5:
-                for error in errors:
-                    getLogger("Midway").error(error)
+            errors = self.validate_psfs()
+            if errors:
+                getLogger("Midway").warning(
+                    f"{len(errors)} Bulk Data issues detected! Proceed with caution."
+                )
+                if len(errors) < 5:
+                    for error in errors:
+                        getLogger("Midway").error(error)
 
         self.parsed = True
 
@@ -188,7 +191,7 @@ class MidwayAsset(MK11Archive):
         data = self.mm.read(export.object_size)
         return data
 
-    def validate_exports(self):
+    def validate_exports(self, skip_bulk: bool = False):
         if not self.export_table:          # nothing → nothing to check
             return []
 
@@ -227,7 +230,7 @@ class MidwayAsset(MK11Archive):
 
         # 4. early-finish
         if prev_end < end:
-            if self.bulk_tables:
+            if not skip_bulk and self.bulk_tables:
                 first_bulk = self.bulk_tables[0].entries[0].decompressed_offset
                 if first_bulk != prev_end:
                     errors.append(

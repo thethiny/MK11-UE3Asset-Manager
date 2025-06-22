@@ -131,8 +131,7 @@ class MK11ExternalTableEntry(Struct):
 class MK11Archive(FileReader):
     def __init__(self, source, extra_source: Any = ""):
         super().__init__(source)
-        if extra_source:
-            self.psf_source = extra_source
+        self.psf_source = extra_source
         self.parsed = False
 
     def read_buffer(self, size):

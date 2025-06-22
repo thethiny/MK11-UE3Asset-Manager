@@ -84,7 +84,7 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
     def __init__(self, path: str, extra_path: str = ""):
         super().__init__(path, extra_path)
 
-    def parse(self):
+    def parse(self, skip_bulk: bool = False):
         self.header = self.parse_header()
         self.compression_mode = CompressionType(self.header.compression_flag)
         self.compressor = self.get_compressor(self.compression_mode)
@@ -93,11 +93,12 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
         self.packages_extra = self.parse_packages() # Same as psf_table but one is in UE3 Asset one is in Midway Asset
         self.skip(0x18)
         self.file_name = self.parse_file_name()
-        self.psf_tables = self.parse_file_table("psf") # Total count must match packages_extra and they should belong in there
-        self.bulk_tables = self.parse_file_table("bulk")
-        self.meta_size = self.mm.tell() # Size of all header metas
+        if not skip_bulk:
+            self.psf_tables = self.parse_file_table("psf") # Total count must match packages_extra and they should belong in there
+            self.bulk_tables = self.parse_file_table("bulk")
+            self.meta_size = self.mm.tell() # Size of all header metas
 
-        self.validate_psf_with_extra()
+            self.validate_psf_with_extra()
 
         self.parsed = True
 
@@ -208,24 +209,25 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
     #         data += decompressed_chunk
     #     return data
 
-    def to_midway(self):
-        buffer = self._MidwayBuilder.from_mk11(self)
+    def to_midway(self, skip_bulk: bool = False):
+        buffer = self._MidwayBuilder.from_mk11(self, skip_bulk)
         return MidwayAsset(buffer, self.psf_source)
 
     class _MidwayBuilder:
         @classmethod
-        def from_mk11(cls, mk11: "MK11UE3Asset"):
+        def from_mk11(cls, mk11: "MK11UE3Asset", skip_bulk: bool = False):
             if not mk11.parsed:
                 logging.getLogger("FArchive").warning(f"MK11 Asset was not parsed. Parsing first.")
-                mk11.parse()
+                mk11.parse(skip_bulk=skip_bulk)
 
             buffer = bytearray()
 
             buffer += cls._build_header(mk11.header, compression_mode=CompressionType.NONE)
             buffer += cls._build_padding()
             buffer += cls._build_filename_section(mk11.file_name)
-            buffer += cls._build_file_tables(mk11.psf_tables)
-            buffer += cls._build_file_tables(mk11.bulk_tables)
+            if not skip_bulk:
+                buffer += cls._build_file_tables(mk11.psf_tables)
+                buffer += cls._build_file_tables(mk11.bulk_tables)
 
             for offset, data in mk11.deserialize_packages():
                 cls._build_midway_block(buffer, offset, data)
@@ -276,17 +278,17 @@ class MK11UE3Asset(MK11Archive): # TODO: For each archive type detect its game v
 
             return buffer
 
-    def parse_all(self, save_path: str = ""):
+    def parse_all(self, save_path: str = "", skip_bulk: bool = False):
         # self = MK11UE3Asset(asset_path)
-        self.parse()
+        self.parse(skip_bulk=skip_bulk)
         if save_path:
             self.dump(save_path)
 
-        midway_file = self.to_midway()
+        midway_file = self.to_midway(skip_bulk=skip_bulk)
         if save_path:
             midway_file.to_file(save_path, self.file_name)
 
-        midway_file.parse(resolve=True)
+        midway_file.parse(resolve=True, skip_bulk=skip_bulk)
         logging.getLogger("Main").debug("%r", midway_file)
 
         if save_path:
