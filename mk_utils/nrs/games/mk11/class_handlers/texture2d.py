@@ -3,7 +3,7 @@ from enum import IntEnum
 import json
 import logging
 import os
-from mk_utils.nrs.games.mk11.class_handlers.bc7 import make_png_data
+from mk_utils.nrs.games.mk11.class_handlers.bc7 import make_dds_data, make_png_data
 from mk_utils.nrs.games.mk11.ue3_properties import UProperty
 from mk_utils.nrs.ue3_common import ClassHandler, MK11ExportTableEntry
 from mk_utils.utils.structs import Struct
@@ -201,7 +201,7 @@ class Texture2DHandler(ClassHandler):
         package_name = bulk_pack.package_name.decode()
 
         if format in {
-            # EPixelFormat.PF_BC4,
+            EPixelFormat.PF_BC4,
             EPixelFormat.PF_BC5,
             EPixelFormat.PF_BC6,
             EPixelFormat.PF_BC7,
@@ -214,16 +214,24 @@ class Texture2DHandler(ClassHandler):
                 EPixelFormat.PF_BC7: 98,   # DXGI_FORMAT_BC7_UNORM
             }
             dxgi_format = dxgi_map[format]
-            image_data, png_data = make_png_data(
-                raw_bytes_folder,
-                data["meta"]["SizeX"],
-                data["meta"]["SizeY"],
-                dxgi_format=dxgi_format
-            )
+            if format == EPixelFormat.PF_BC4:
+                image_data = make_dds_data(
+                    raw_bytes_folder,
+                    data["meta"]["SizeX"],
+                    data["meta"]["SizeY"],
+                    dxgi_format=dxgi_format,
+                )
+                png_data = None
+            else:
+                image_data, png_data = make_png_data(
+                    raw_bytes_folder,
+                    data["meta"]["SizeX"],
+                    data["meta"]["SizeY"],
+                    dxgi_format=dxgi_format
+                )
         else:
             logging.getLogger("Texture2DHandler").warning(f"Texture2D Format {format.name} is not yet supported!")
             return
-
 
         if image_data:
             with open(image_file, "wb") as f:
@@ -235,6 +243,5 @@ class Texture2DHandler(ClassHandler):
         # Save json last cuz it's what determines success
         with open(save_file, "w+") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-        
 
         return save_file
