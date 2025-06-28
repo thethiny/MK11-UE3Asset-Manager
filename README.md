@@ -7,15 +7,15 @@
 - [x] Compression: Oodle  
 - [ ] Compression: ZLIB  
 - [x] Packages  
-- [ ] Extra Packages  
-- [ ] PSF Data  
-- [ ] Bulk Data  
-- [ ] UPK Extra Data  
+- [x] Extra Packages  
+- [x] PSF Data  
+- [x] Bulk Data  
+- [x] UPK Extra Data  
 
 ### Midway Asset
-- [ ] Compression: Yes  
+- [x] Compression: Yes  
 - [x] Compression: No  
 
 ### Data Handlers
-- [x] File Formats: Databases  
-- [ ] File Formats: Other Formats  
+- Loot Tables
+- Texture2D
